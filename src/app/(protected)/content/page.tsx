@@ -2,58 +2,78 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { FiSearch, FiPlus, FiEdit, FiTrash2, FiBarChart2, FiFilter, FiChevronDown, FiEye, FiCalendar, FiTag } from 'react-icons/fi';
+import contentService from '../../../services/content';
+import DeleteContentModal from '../../../components/content/DeleteContentModal';
+import { ContentListItem, ContentFilter } from '../../../types/content';
 
 export default function ContentPage() {
-  const [contentItems, setContentItems] = useState([
-    { id: 1, title: 'Getting Started with H2Space', status: 'published', date: '2025-04-01', category: 'Tutorial', views: 245 },
-    { id: 2, title: 'Content Monetization Strategies', status: 'draft', date: '2025-04-05', category: 'Business', views: 0 },
-    { id: 3, title: 'Audience Engagement Techniques', status: 'published', date: '2025-03-28', category: 'Marketing', views: 189 },
-    { id: 4, title: 'Creating Compelling Content', status: 'published', date: '2025-03-15', category: 'Tutorial', views: 432 },
-    { id: 5, title: 'SEO Best Practices', status: 'draft', date: '2025-04-02', category: 'Marketing', views: 0 },
-    { id: 6, title: 'Platform Features Overview', status: 'published', date: '2025-03-20', category: 'Tutorial', views: 312 },
-    { id: 7, title: 'Analytics Deep Dive', status: 'draft', date: '2025-04-07', category: 'Business', views: 0 },
-    { id: 8, title: 'Community Building Strategies', status: 'published', date: '2025-03-25', category: 'Marketing', views: 156 }
-  ]);
-  
+  const router = useRouter();
+  const [contentItems, setContentItems] = useState<ContentListItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [sortDirection, setSortDirection] = useState('desc');
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteContent, setDeleteContent] = useState<{ id: string, title: string } | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [categories, setCategories] = useState<string[]>(['all']);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   
   // Get stats for the dashboard
   const publishedCount = contentItems.filter(item => item.status === 'published').length;
   const draftCount = contentItems.filter(item => item.status === 'draft').length;
-  const totalViews = contentItems.reduce((sum, item) => sum + item.views, 0);
+  const totalViews = contentItems.reduce((sum, item) => sum + (item.views || 0), 0);
   
-  // Get unique categories for filter dropdown
-  const categories = ['all', ...new Set(contentItems.map(item => item.category))];
-  
-  // Filter content based on multiple criteria
-  const filteredContent = contentItems
-    .filter(item => filter === 'all' || item.status === filter)
-    .filter(item => categoryFilter === 'all' || item.category === categoryFilter)
-    .filter(item => item.title.toLowerCase().includes(searchTerm.toLowerCase()))
-    .sort((a, b) => {
-      if (sortBy === 'date') {
-        return sortDirection === 'asc' 
-          ? new Date(a.date) - new Date(b.date)
-          : new Date(b.date) - new Date(a.date);
-      } else if (sortBy === 'views') {
-        return sortDirection === 'asc' ? a.views - b.views : b.views - a.views;
-      } else if (sortBy === 'title') {
-        return sortDirection === 'asc' 
-          ? a.title.localeCompare(b.title)
-          : b.title.localeCompare(a.title);
+  // Fetch content data
+  useEffect(() => {
+    const fetchContent = async () => {
+      setIsLoading(true);
+      try {
+        // Prepare filter object for API
+        const apiFilter: ContentFilter = {
+          search: searchTerm || undefined,
+          status: filter !== 'all' ? filter as 'published' | 'draft' | 'archived' : undefined,
+          category: categoryFilter !== 'all' ? categoryFilter : undefined
+        };
+        
+        // Call API
+        const result = await contentService.getContents(page, 10, apiFilter);
+        
+        setContentItems(result.data);
+        setTotalCount(result.total);
+        setTotalPages(result.totalPages);
+      } catch (error) {
+        console.error('Failed to fetch content:', error);
+      } finally {
+        setIsLoading(false);
       }
-      return 0;
-    });
+    };
+    
+    fetchContent();
+  }, [page, filter, categoryFilter, searchTerm, sortBy, sortDirection]);
+  
+  // Fetch categories for filter
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const categoriesData = await contentService.getCategories();
+        setCategories(['all', ...categoriesData]);
+      } catch (error) {
+        console.error('Failed to fetch categories:', error);
+      }
+    };
+    
+    fetchCategories();
+  }, []);
   
   // Handle sort change
-  const handleSort = (column) => {
+  const handleSort = (column: string) => {
     if (sortBy === column) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
@@ -63,9 +83,35 @@ export default function ContentPage() {
   };
   
   // Handle delete content
-  const handleDelete = (id) => {
-    setContentItems(contentItems.filter(item => item.id !== id));
-    setShowDeleteConfirm(null);
+  const handleDeleteConfirm = (content: ContentListItem) => {
+    setDeleteContent({
+      id: content.id,
+      title: content.title
+    });
+    setShowDeleteModal(true);
+  };
+  
+  // Handle content deletion
+  const handleDelete = async (id: string) => {
+    try {
+      await contentService.deleteContent(id);
+      // Refresh content list after deletion
+      setContentItems(contentItems.filter(item => item.id !== id));
+      setShowDeleteModal(false);
+      setDeleteContent(null);
+    } catch (error) {
+      console.error('Failed to delete content:', error);
+    }
+  };
+  
+  // Format date for display
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
   };
   
   return (
@@ -84,7 +130,7 @@ export default function ContentPage() {
             </div>
             <div className="mt-4 flex md:mt-0 md:ml-4">
               <Link
-                href="/content/new"
+                href="/content/create"
                 className="inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors duration-200"
               >
                 <FiPlus className="w-4 h-4 mr-2" />
@@ -215,183 +261,250 @@ export default function ContentPage() {
         
         {/* Content Table */}
         <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th 
-                    scope="col" 
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors duration-200"
-                    onClick={() => handleSort('title')}
-                  >
-                    <div className="flex items-center">
-                      Title
-                      {sortBy === 'title' && (
-                        <FiChevronDown 
-                          className={`ml-1 h-4 w-4 transform ${sortDirection === 'asc' ? 'rotate-180' : ''}`} 
-                        />
-                      )}
-                    </div>
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Category
-                  </th>
-                  <th 
-                    scope="col" 
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors duration-200"
-                    onClick={() => handleSort('date')}
-                  >
-                    <div className="flex items-center">
-                      Date
-                      {sortBy === 'date' && (
-                        <FiChevronDown 
-                          className={`ml-1 h-4 w-4 transform ${sortDirection === 'asc' ? 'rotate-180' : ''}`} 
-                        />
-                      )}
-                    </div>
-                  </th>
-                  <th 
-                    scope="col" 
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors duration-200"
-                    onClick={() => handleSort('views')}
-                  >
-                    <div className="flex items-center">
-                      Views
-                      {sortBy === 'views' && (
-                        <FiChevronDown 
-                          className={`ml-1 h-4 w-4 transform ${sortDirection === 'asc' ? 'rotate-180' : ''}`} 
-                        />
-                      )}
-                    </div>
-                  </th>
-                  <th scope="col" className="relative px-6 py-3">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredContent.map((content) => (
-                  <tr 
-                    key={content.id} 
-                    className="hover:bg-gray-50 transition-colors duration-150"
-                  >
-                    <td className="px-6 py-4">
+          {isLoading ? (
+            <div className="py-12 text-center">
+              <div className="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-600"></div>
+              <p className="mt-4 text-gray-500">Loading content...</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th 
+                      scope="col" 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors duration-200"
+                      onClick={() => handleSort('title')}
+                    >
                       <div className="flex items-center">
-                        <div className="text-sm font-medium text-gray-900 hover:text-indigo-600 cursor-pointer transition-colors duration-200">
-                          {content.title}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        content.status === 'published' 
-                          ? 'bg-green-100 text-green-800 border border-green-200' 
-                          : 'bg-yellow-100 text-yellow-800 border border-yellow-200'
-                      }`}>
-                        {content.status === 'published' ? (
-                          <div className="flex items-center">
-                            <span className="w-2 h-2 mr-1.5 rounded-full bg-green-500"></span>
-                            Published
-                          </div>
-                        ) : (
-                          <div className="flex items-center">
-                            <span className="w-2 h-2 mr-1.5 rounded-full bg-yellow-500"></span>
-                            Draft
-                          </div>
+                        Title
+                        {sortBy === 'title' && (
+                          <FiChevronDown 
+                            className={`ml-1 h-4 w-4 transform ${sortDirection === 'asc' ? 'rotate-180' : ''}`} 
+                          />
                         )}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <FiTag className="h-4 w-4 text-gray-400 mr-2" />
-                        <span className="text-sm text-gray-500">{content.category}</span>
                       </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    </th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Category
+                    </th>
+                    <th 
+                      scope="col" 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors duration-200"
+                      onClick={() => handleSort('updatedAt')}
+                    >
                       <div className="flex items-center">
-                        <FiCalendar className="h-4 w-4 text-gray-400 mr-2" />
-                        <span className="text-sm text-gray-500">{content.date}</span>
+                        Last Updated
+                        {sortBy === 'updatedAt' && (
+                          <FiChevronDown 
+                            className={`ml-1 h-4 w-4 transform ${sortDirection === 'asc' ? 'rotate-180' : ''}`} 
+                          />
+                        )}
                       </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    </th>
+                    <th 
+                      scope="col" 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors duration-200"
+                      onClick={() => handleSort('views')}
+                    >
                       <div className="flex items-center">
-                        <FiEye className="h-4 w-4 text-gray-400 mr-2" />
-                        <span className="text-sm text-gray-500">{content.views}</span>
+                        Views
+                        {sortBy === 'views' && (
+                          <FiChevronDown 
+                            className={`ml-1 h-4 w-4 transform ${sortDirection === 'asc' ? 'rotate-180' : ''}`} 
+                          />
+                        )}
                       </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex space-x-3 justify-end">
-                        <button className="text-indigo-600 hover:text-indigo-900 transition-colors duration-200 flex items-center">
-                          <FiEdit className="h-4 w-4 mr-1" />
-                          Edit
-                        </button>
-                        
-                        {showDeleteConfirm === content.id ? (
-                          <div className="flex items-center space-x-2">
-                            <button 
-                              onClick={() => handleDelete(content.id)}
-                              className="text-red-600 bg-red-50 hover:bg-red-100 px-2 py-1 rounded transition-colors duration-200"
-                            >
-                              Confirm
-                            </button>
-                            <button 
-                              onClick={() => setShowDeleteConfirm(null)}
-                              className="text-gray-600 bg-gray-50 hover:bg-gray-100 px-2 py-1 rounded transition-colors duration-200"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
+                    </th>
+                    <th scope="col" className="relative px-6 py-3">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {contentItems.map((content) => (
+                    <tr 
+                      key={content.id} 
+                      className="hover:bg-gray-50 transition-colors duration-150"
+                    >
+                      <td className="px-6 py-4">
+                        <div className="flex items-center">
+                          {content.featuredImage && (
+                            <div className="flex-shrink-0 h-10 w-10 mr-3">
+                              <img 
+                                className="h-10 w-10 rounded-md object-cover" 
+                                src={content.featuredImage} 
+                                alt="" 
+                              />
+                            </div>
+                          )}
+                          <Link 
+                            href={`/content/${content.id}`}
+                            className="text-sm font-medium text-gray-900 hover:text-indigo-600 cursor-pointer transition-colors duration-200"
+                          >
+                            {content.title}
+                          </Link>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          content.status === 'published' 
+                            ? 'bg-green-100 text-green-800 border border-green-200' 
+                            : content.status === 'draft'
+                              ? 'bg-yellow-100 text-yellow-800 border border-yellow-200'
+                              : 'bg-red-100 text-red-800 border border-red-200'
+                        }`}>
+                          {content.status === 'published' ? (
+                            <div className="flex items-center">
+                              <span className="w-2 h-2 mr-1.5 rounded-full bg-green-500"></span>
+                              Published
+                            </div>
+                          ) : content.status === 'draft' ? (
+                            <div className="flex items-center">
+                              <span className="w-2 h-2 mr-1.5 rounded-full bg-yellow-500"></span>
+                              Draft
+                            </div>
+                          ) : (
+                            <div className="flex items-center">
+                              <span className="w-2 h-2 mr-1.5 rounded-full bg-red-500"></span>
+                              Archived
+                            </div>
+                          )}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <FiTag className="h-4 w-4 text-gray-400 mr-2" />
+                          <span className="text-sm text-gray-500">{content.category || 'Uncategorized'}</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <FiCalendar className="h-4 w-4 text-gray-400 mr-2" />
+                          <span className="text-sm text-gray-500">{formatDate(content.updatedAt)}</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <FiEye className="h-4 w-4 text-gray-400 mr-2" />
+                          <span className="text-sm text-gray-500">{content.views || 0}</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <div className="flex space-x-3 justify-end">
+                          <Link 
+                            href={`/content/edit/${content.id}`}
+                            className="text-indigo-600 hover:text-indigo-900 transition-colors duration-200 flex items-center"
+                          >
+                            <FiEdit className="h-4 w-4 mr-1" />
+                            Edit
+                          </Link>
+                          
                           <button 
-                            onClick={() => setShowDeleteConfirm(content.id)}
+                            onClick={() => handleDeleteConfirm(content)}
                             className="text-red-600 hover:text-red-900 transition-colors duration-200 flex items-center"
                           >
                             <FiTrash2 className="h-4 w-4 mr-1" />
                             Delete
                           </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           
-          {filteredContent.length === 0 && (
+          {!isLoading && contentItems.length === 0 && (
             <div className="py-12 text-center">
               <div className="inline-block p-4 rounded-full bg-gray-100 mb-4">
                 <FiSearch className="h-6 w-6 text-gray-400" />
               </div>
               <p className="text-gray-500 font-medium">No content found matching your filters.</p>
               <p className="text-gray-400 text-sm mt-1">Try adjusting your search or filter criteria.</p>
+              <div className="mt-6">
+                <Link
+                  href="/content/create"
+                  className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+                >
+                  <FiPlus className="-ml-1 mr-2 h-5 w-5" />
+                  Create New Content
+                </Link>
+              </div>
             </div>
           )}
         </div>
         
-        {/* Pagination (simplified for demo) */}
-        {filteredContent.length > 0 && (
+        {/* Pagination */}
+        {!isLoading && contentItems.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm mt-6 p-4 flex items-center justify-between">
             <div className="text-sm text-gray-500">
-              Showing <span className="font-medium">{filteredContent.length}</span> of <span className="font-medium">{contentItems.length}</span> items
+              Showing <span className="font-medium">{contentItems.length}</span> of <span className="font-medium">{totalCount}</span> items
             </div>
             <div className="flex space-x-2">
-              <button className="px-3 py-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 text-sm disabled:opacity-50" disabled>
+              <button 
+                onClick={() => setPage(Math.max(1, page - 1))}
+                className={`px-3 py-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 text-sm ${page <= 1 ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                disabled={page <= 1}
+              >
                 Previous
               </button>
-              <button className="px-3 py-1 rounded border border-gray-200 bg-gray-50 text-gray-700 font-medium text-sm">
-                1
-              </button>
-              <button className="px-3 py-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 text-sm disabled:opacity-50" disabled>
+              
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pageNum;
+                if (totalPages <= 5) {
+                  pageNum = i + 1;
+                } else if (page <= 3) {
+                  pageNum = i + 1;
+                } else if (page >= totalPages - 2) {
+                  pageNum = totalPages - 4 + i;
+                } else {
+                  pageNum = page - 2 + i;
+                }
+                
+                return (
+                  <button 
+                    key={pageNum}
+                    onClick={() => setPage(pageNum)}
+                    className={`px-3 py-1 rounded border ${
+                      pageNum === page
+                        ? 'border-indigo-500 bg-indigo-50 text-indigo-600 font-medium'
+                        : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+                    } text-sm`}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+              
+              <button 
+                onClick={() => setPage(Math.min(totalPages, page + 1))}
+                className={`px-3 py-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 text-sm ${page >= totalPages ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={page >= totalPages}
+              >
                 Next
               </button>
             </div>
           </div>
         )}
       </div>
+      
+      {/* Delete Modal */}
+      {deleteContent && (
+        <DeleteContentModal
+          contentId={deleteContent.id}
+          contentTitle={deleteContent.title}
+          isOpen={showDeleteModal}
+          onClose={() => {
+            setShowDeleteModal(false);
+            setDeleteContent(null);
+          }}
+        />
+      )}
     </div>
   );
 }
